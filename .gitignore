@@ -1,0 +1,36 @@
+#venv
+venv_mvts
+src/datasets/container_traces_2990_a_b_c_d_e_f.csv
+
+# Env and package
+.env
+.vscode
+*.whl
+build
+*.egg-info
+
+# Dataset
+*.npz
+
+# Models
+*.pth
+*.pickle
+
+# Compiled python
+*.pyc
+
+# Jupyter
+*.ipynb
+.ipynb_checkpoints
+
+# Doc
+_build
+
+# Figures
+*.png
+*.jpg
+
+# Logs
+logs
+
+.idea
