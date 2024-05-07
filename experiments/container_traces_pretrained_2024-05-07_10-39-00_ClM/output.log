@@ -1,5 +1,0 @@
-Running:
-src/main.py --output_dir experiments --comment classification from Scratch --name container_traces_pretrained --records_file Classification_records.xls --data_dir src/container_traces_21_a_b_c_d_e_f.csv --data_class container_traces --pattern TRAIN --val_pattern TEST --epochs 700 --lr 0.001 --optimizer RAdam --batch_size 1 --pos_encoding learnable --d_model 8 --task classification --key_metric accuracy
-
-Using device: cuda
-Loading and preprocessing data ...

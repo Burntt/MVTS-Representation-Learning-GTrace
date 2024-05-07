@@ -1,6 +1,7 @@
 #venv
 venv_mvts
 src/datasets/container_traces_2990_a_b_c_d_e_f.csv
+experiments/
 
 # Env and package
 .env
