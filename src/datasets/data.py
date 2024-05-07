@@ -96,72 +96,157 @@ class BaseData(object):
             self.n_proc = min(n_proc, cpu_count())
 
 
+
 class ContainerTraceData(BaseData):
     """
-    Dataset class for Container Traces dataset.
+    Dataset class for Container Traces dataset adapted for unsupervised learning.
     Attributes:
-        all_df: dataframe indexed by trace_id, each row corresponds to a time step; Each column is a feature.
-        feature_df: subset of columns of `all_df` which correspond to selected features
+        all_df: (num_samples * seq_len, num_columns) dataframe indexed by trace_id with multiple rows corresponding to the same trace_id (sample).
+            Each row is a time step; Each column is a feature.
+        feature_df: (num_samples * seq_len, feat_dim) dataframe; contains the subset of columns of `all_df` which correspond to selected features
         feature_names: names of columns contained in `feature_df` (same as feature_df.columns)
-        all_IDs: trace_ids contained in `all_df` (same as all_df.index.unique())
-        max_seq_len: maximum sequence length (time series length)
+        all_IDs: (num_samples,) series of trace_ids contained in `all_df`/`feature_df` (same as all_df.index.unique())
+        max_seq_len: maximum sequence length (time series length), dynamically determined if not preset.
     """
 
     def __init__(self, root_dir, file_list=None, pattern=None, n_proc=1, limit_size=None, config=None):
-        self.set_num_processes(n_proc=n_proc)
+        super().set_num_processes(n_proc=n_proc)
         self.config = config  # Store the configuration if needed for further processing
         
         self.all_df = self.load_all(root_dir, file_list=file_list, pattern=pattern)
-        self.all_df = self.all_df.sort_values(by=['date'])  # Ensuring data is sorted by date
-        self.all_df = self.all_df.set_index('trace_id')
-        self.all_IDs = self.all_df.index.unique()
-        self.max_seq_len = 8929  # Default to 8929 or from config
-
+        self.all_df = self.all_df.sort_values(by=['date'])  # Ensure data is sorted by date
         self.feature_names = config.get('feature_names', ['avg_cpu_cores', 'max_cpu_cores', 'avg_memory_usage', 'max_memory_usage'])
         self.feature_df = self.all_df[self.feature_names]
 
+        self.max_seq_len = self.determine_max_seq_len()
+
+        self.all_IDs = self.all_df.index.unique()
         if limit_size is not None:
-            if limit_size > 1:
-                limit_size = int(limit_size)
-            else:  # interpret as proportion if in (0, 1]
-                limit_size = int(limit_size * len(self.all_IDs))
-            self.all_IDs = self.all_IDs[:limit_size]
-            self.all_df = self.all_df.loc[self.all_IDs]
+            self.apply_limit_size(limit_size)
+
+    def determine_max_seq_len(self):
+        """Determine the maximum sequence length based on the data."""
+        if 'seq_len' in self.config:
+            return self.config['seq_len']
+        else:
+            return self.all_df.groupby(self.all_df.index).size().max()
+
+    def apply_limit_size(self, limit_size):
+        """Limit the size of the dataset based on the given limit_size parameter."""
+        if limit_size > 1:
+            limit_size = int(limit_size)
+        else:  # interpret as proportion if in (0, 1]
+            limit_size = int(limit_size * len(self.all_IDs))
+        self.all_IDs = self.all_IDs[:limit_size]
+        self.all_df = self.all_df.loc[self.all_IDs]
 
     def load_all(self, root_dir, file_list=None, pattern=None):
+        if os.path.isdir(root_dir):
+            # Existing logic to handle directory input
+            data_paths = self.get_data_paths(root_dir, file_list, pattern)
+            if self.n_proc > 1:
+                with Pool(processes=self.n_proc) as pool:
+                    all_df = pd.concat(pool.map(self.load_single, data_paths))
+            else:
+                all_df = pd.concat(map(self.load_single, data_paths))
+        elif os.path.isfile(root_dir):
+            # Handle file input directly
+            all_df = self.load_single(root_dir)
+        else:
+            raise Exception('Provided path does not exist: {}'.format(root_dir))
+        
+        return all_df.set_index('trace_id')
+
+
+    def get_data_paths(self, root_dir, file_list, pattern):
+        """Generate file paths based on the directory, file list, and pattern."""
         if os.path.isdir(root_dir):
             if file_list is None:
                 data_paths = glob.glob(os.path.join(root_dir, '*'))
             else:
                 data_paths = [os.path.join(root_dir, p) for p in file_list]
-
-            if not data_paths:
-                raise Exception('No files found at: {}'.format(root_dir))
-
             selected_paths = data_paths if pattern is None else [p for p in data_paths if re.search(pattern, p)]
-
-            if not selected_paths:
-                raise Exception("No matching files found with pattern: '{}'".format(pattern))
-
-            if self.n_proc > 1:
-                with Pool(processes=self.n_proc) as pool:
-                    all_df = pd.concat(pool.map(self.load_single, selected_paths))
-            else:
-                all_df = pd.concat(map(self.load_single, selected_paths))
-        elif os.path.isfile(root_dir):
-            all_df = pd.read_csv(root_dir)
         else:
-            raise Exception('Provided path does not exist: {}'.format(root_dir))
-
-        return all_df
+            raise Exception('Provided path does not exist or is not a directory: {}'.format(root_dir))
+        if not selected_paths:
+            raise Exception("No matching files found with pattern: '{}'".format(pattern))
+        return selected_paths
 
     @staticmethod
     def load_single(filepath):
+        """Load a single file into a DataFrame and handle NaN values."""
         df = pd.read_csv(filepath)
-        if df.isna().sum().sum() > 0:
-            logger.warning("NaN values found in {}. Replacing with 0".format(filepath))
-            df.fillna(0, inplace=True)
+        df.fillna(0, inplace=True)  # Handling NaNs by replacing them with zeros
         return df
+
+
+
+# class ContainerTraceData(BaseData):
+#     """
+#     Dataset class for Container Traces dataset.
+#     Attributes:
+#         all_df: dataframe indexed by trace_id, each row corresponds to a time step; Each column is a feature.
+#         feature_df: subset of columns of `all_df` which correspond to selected features
+#         feature_names: names of columns contained in `feature_df` (same as feature_df.columns)
+#         all_IDs: trace_ids contained in `all_df` (same as all_df.index.unique())
+#         max_seq_len: maximum sequence length (time series length)
+#     """
+
+#     def __init__(self, root_dir, file_list=None, pattern=None, n_proc=1, limit_size=None, config=None):
+#         self.set_num_processes(n_proc=n_proc)
+#         self.config = config  # Store the configuration if needed for further processing
+        
+#         self.all_df = self.load_all(root_dir, file_list=file_list, pattern=pattern)
+#         self.all_df = self.all_df.sort_values(by=['date'])  # Ensuring data is sorted by date
+#         self.all_df = self.all_df.set_index('trace_id')
+#         self.all_IDs = self.all_df.index.unique()
+#         self.max_seq_len = 8929  # Default to 8929 or from config
+
+#         self.feature_names = config.get('feature_names', ['avg_cpu_cores', 'max_cpu_cores', 'avg_memory_usage', 'max_memory_usage'])
+#         self.feature_df = self.all_df[self.feature_names]
+
+#         if limit_size is not None:
+#             if limit_size > 1:
+#                 limit_size = int(limit_size)
+#             else:  # interpret as proportion if in (0, 1]
+#                 limit_size = int(limit_size * len(self.all_IDs))
+#             self.all_IDs = self.all_IDs[:limit_size]
+#             self.all_df = self.all_df.loc[self.all_IDs]
+
+#     def load_all(self, root_dir, file_list=None, pattern=None):
+#         if os.path.isdir(root_dir):
+#             if file_list is None:
+#                 data_paths = glob.glob(os.path.join(root_dir, '*'))
+#             else:
+#                 data_paths = [os.path.join(root_dir, p) for p in file_list]
+
+#             if not data_paths:
+#                 raise Exception('No files found at: {}'.format(root_dir))
+
+#             selected_paths = data_paths if pattern is None else [p for p in data_paths if re.search(pattern, p)]
+
+#             if not selected_paths:
+#                 raise Exception("No matching files found with pattern: '{}'".format(pattern))
+
+#             if self.n_proc > 1:
+#                 with Pool(processes=self.n_proc) as pool:
+#                     all_df = pd.concat(pool.map(self.load_single, selected_paths))
+#             else:
+#                 all_df = pd.concat(map(self.load_single, selected_paths))
+#         elif os.path.isfile(root_dir):
+#             all_df = pd.read_csv(root_dir)
+#         else:
+#             raise Exception('Provided path does not exist: {}'.format(root_dir))
+
+#         return all_df
+
+#     @staticmethod
+#     def load_single(filepath):
+#         df = pd.read_csv(filepath)
+#         if df.isna().sum().sum() > 0:
+#             logger.warning("NaN values found in {}. Replacing with 0".format(filepath))
+#             df.fillna(0, inplace=True)
+#         return df
 
 class TSRegressionArchive(BaseData):
     """
